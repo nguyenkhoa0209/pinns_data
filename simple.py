@@ -546,7 +546,7 @@ class PINNs:
             :type X_f: numpy.ndarray
             :param param_f: PDE parameters
             :type param_f: numpy.ndarray
-            
+
             :meta private:
             """
 
@@ -593,15 +593,14 @@ class PINNs:
                                            method=method, callback=callback, **kwargs)
 
         if max_epochs_lbfgs > 0:
-            if self.net_u.method == 'classic':
-                if max_epochs_adam == 0:
-                    draft = self.net_u(self.X_colloc)
+            if max_epochs_adam == 0:
+                draft = self.net_u(self.X_colloc)
 
-                optimizer_lbfgs(self.X_colloc, self.param_pde,
-                                method='L-BFGS-B',
-                                options={'maxiter': max_epochs_lbfgs,
-                                         'maxfun': max_epochs_lbfgs,
-                                         'maxcor': 100,
-                                         'maxls': 100,
-                                         'ftol': 0,
-                                         'gtol': 1.0 * np.finfo(float).eps})
+            optimizer_lbfgs(self.X_colloc, self.param_pde,
+                            method='L-BFGS-B',
+                            options={'maxiter': max_epochs_lbfgs,
+                                     'maxfun': max_epochs_lbfgs,
+                                     'maxcor': 100,
+                                     'maxls': 100,
+                                     'ftol': 0,
+                                     'gtol': 1.0 * np.finfo(float).eps})
