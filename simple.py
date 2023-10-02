@@ -219,7 +219,7 @@ class PINNs:
         self.thres = thres
         self.epoch = 0
 
-    def wrap_training_variables(self):
+    def pinns_training_variables(self):
         """
         Define training parameters in the neural networks
 
@@ -480,7 +480,7 @@ class PINNs:
             loss_value, loss_bc, loss_init, loss_data, loss_other, loss_f = self.loss_pinns(X_f, param_f, self.net_u, u_pred_bc, self.u_bc, u_pred_init, self.u_init,
                                          u_pred_data, self.u_data, u_pred_other, self.u_other, self.X_traction, self.pde_weights)
 
-            grads = tape.gradient(loss_value, self.wrap_training_variables())
+            grads = tape.gradient(loss_value, self.pinns_training_variables())
 
         return loss_value,loss_bc, loss_init, loss_data, loss_other, loss_f, grads
 
@@ -501,7 +501,7 @@ class PINNs:
 
             loss_value_, loss_bc_, loss_init_, loss_data_, loss_other_, loss_f_, grads = self.get_grad(X_f, param_f)
             self.tf_optimizer.apply_gradients(
-                zip(grads, self.wrap_training_variables()))
+                zip(grads, self.pinns_training_variables()))
 
             return loss_value_, loss_bc_, loss_init_, loss_data_, loss_other_, loss_f_
 
@@ -536,108 +536,71 @@ class PINNs:
                 self.param_pde_array = np.append(self.param_pde_array, self.param_pde.numpy())
             if self.epoch % print_per_epochs == 0:
                 print('Loss pinns at epoch %d (L-BFGS):' % self.epoch, self.current_loss)
-            # self.hist.append(self.current_loss)
             self.epoch += 1
 
-        def solve_with_ScipyOptimizer(X_f, param_f, method='L-BFGS-B', **kwargs):
-            # https://colab.research.google.com/github/janblechschmidt/PDEsByNNs/blob/main/PINN_Solver.ipynb#scrollTo=S8PNryTZZEks
-            """This method provides an interface to solve the learning problem
-            using a routine from scipy.optimize.minimize.
-            (Tensorflow 1.xx had an interface implemented, which is not longer
-            supported in Tensorflow 2.xx.)
-            Type conversion is necessary since scipy-routines are written in Fortran
-            which requires 64-bit floats instead of 32-bit floats."""
+        def optimizer_lbfgs(X_f, param_f, method='L-BFGS-B', **kwargs):
+            """
+            Optimizer LBFGS to minimize the loss
 
-            def get_weight_tensor():
-                """Function to return current variables of the model
-                as 1d tensor as well as corresponding shapes as lists."""
+            :param X_f: Collocation points
+            :type X_f: numpy.ndarray
+            :param param_f: PDE parameters
+            :type param_f: numpy.ndarray
+            :meta private:
+            """
 
-                weight_list = []
-                shape_list = []
+            def get_weight():
+                list_weight = []
+                for variable in self.pinns_training_variables():
+                    list_weight.extend(variable.numpy().flatten())
+                list_weight = tf.convert_to_tensor(list_weight)
+                return list_weight
 
-                # Loop over all variables, i.e. weight matrices, bias vectors and unknown parameters
-                for v in self.net_u.variables:
-                    shape_list.append(v.shape)
-                    weight_list.extend(v.numpy().flatten())
-
-                if self.type_problem == 'inverse':
-                    weight_list.extend(self.param_pde.numpy())
-
-                weight_list = tf.convert_to_tensor(weight_list)
-                return weight_list, shape_list
-
-            x0, shape_list = get_weight_tensor()
-
-            def set_weight_tensor(weight_list):
-                """Function which sets list of weights
-                to variables in the model."""
-                idx = 0
-                for v in self.net_u.variables:
-                    vs = v.shape
-
-                    # Weight matrices
-                    if len(vs) == 2:
-                        sw = vs[0] * vs[1]
-                        new_val = tf.reshape(weight_list[idx:idx + sw], (vs[0], vs[1]))
-                        idx += sw
-
-                    # Bias vectors
-                    elif len(vs) == 1:
-                        new_val = weight_list[idx:idx + vs[0]]
-                        idx += vs[0]
-
-                    # Variables (in case of parameter identification setting)
-                    elif len(vs) == 0:
-                        new_val = weight_list[idx]
-                        idx += 1
-
-                    if self.type_problem == 'inverse':
-                        for i in range(self.param_pde.shape[0]):
-                            self.param_pde[i:(i + 1)].assign([weight_list[-(self.param_pde.shape[0] - i)]])
-
-                    # Assign variables (Casting necessary since scipy requires float64 type)
-                    v.assign(tf.cast(new_val, 'float64'))
+            def set_weight(list_weight):
+                index = 0
+                for variable in self.pinns_training_variables():
+                    if len(variable.shape) == 2:
+                        len_weights = variable.shape[0] * variable.shape[1]
+                        new_variable = tf.reshape(list_weight[index:index + len_weights],
+                                                  (variable.shape[0], variable.shape[1]))
+                        index += len_weights
+                    elif len(variable.shape) == 1:
+                        len_biases = variable.shape[0]
+                        new_variable = list_weight[index:index + len_biases]
+                        index += len_biases
+                    else:
+                        new_variable = list_weight[index]
+                        index += 1
+                    variable.assign(tf.cast(new_variable, 'float64'))
 
             def get_loss_and_grad(w):
-                """Function that provides current loss and gradient
-                w.r.t the trainable variables as vector. This is mandatory
-                for the LBFGS minimizer from scipy."""
-
-                # Update weights in model
-                set_weight_tensor(w)
-                # Determine value of \phi and gradient w.r.t. \theta at w
+                set_weight(w)
                 loss_value, loss_bc, loss_init, loss_data, loss_other, loss_f, grad = self.get_grad(X_f, param_f)
                 self.loss_array = np.append(self.loss_array, loss_value.numpy())
-
-                # Store current loss for callback function
                 loss = loss_value.numpy().astype(np.float64)
                 self.current_loss = loss
 
-                # Flatten gradient
                 grad_flat = []
                 for g in grad:
                     grad_flat.extend(g.numpy().flatten())
-
-                # Gradient list to array
                 grad_flat = np.array(grad_flat, dtype=np.float64)
-
-                # Return value and gradient of \phi as tuple
                 return loss, grad_flat
 
             return scipy.optimize.minimize(fun=get_loss_and_grad,
-                                           x0=x0,
+                                           x0=get_weight(),
                                            jac=True,
                                            method=method, callback=callback, **kwargs)
 
-        if max_epochs_lbfgs>0:
-            if max_epochs_adam==0:
-                draft = self.net_u(self.X_colloc)
-            #lbfgsb_optimization()
+        if max_epochs_lbfgs > 0:
+            if self.net_u.method == 'classic':
+                if max_epochs_adam == 0:
+                    draft = self.net_u(self.X_colloc)
 
-            solve_with_ScipyOptimizer(self.X_colloc, self.param_pde,
-                                      method='L-BFGS-B',
-                                      options={'maxiter': max_epochs_lbfgs,
-                                               'maxfun': int(max_epochs_lbfgs*1.25),
-                                               'maxcor': 100,
-                                               'maxls': 50,
-                                               'ftol': 1.0 * np.finfo(float).eps})
+                optimizer_lbfgs(self.X_colloc, self.param_pde,
+                                method='L-BFGS-B',
+                                options={'maxiter': max_epochs_lbfgs,
+                                         'maxfun': max_epochs_lbfgs,
+                                         'maxcor': 100,
+                                         'maxls': 100,
+                                         'ftol': 0,
+                                         'gtol': 1.0 * np.finfo(float).eps})
