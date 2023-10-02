@@ -546,6 +546,7 @@ class PINNs:
             :type X_f: numpy.ndarray
             :param param_f: PDE parameters
             :type param_f: numpy.ndarray
+            
             :meta private:
             """
 
